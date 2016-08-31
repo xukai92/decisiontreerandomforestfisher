@@ -1,18 +1,17 @@
 # Load packages
 using DataArrays, DataFrames
 using Optim
+include("helper.jl")
 
 # Read dataset
 df = readtable("Fisher.csv")
 
 # Split dataset
 training = df[1:100, :]
-testing = df[101:150, :]
+validation = df[101:130, :]
+testing = df[131:150, :]
 
-# Gini impurity
-function IG(fs)
-  return sum(map(x -> x * (1 - x), fs))
-end
+HS = keys(df)[2:5]          # headers
 
 # Split by threshold
 function split_by_th(df, by, threshold)
@@ -24,19 +23,99 @@ function to_precent(ts)
   return counts(ts, 0:2) / length(ts)
 end
 
-# total IG after aplit
-function totoal_IG_after_split(df, by, threshold)
+# Total IG after aplit
+function totoal_impurity_after_split(df, by, threshold, impurity_func)
   left, right = split_by_th(df, by, threshold)
-  return IG(to_precent(left[:Type])) + IG(to_precent(right[:Type]))
+  return impurity_func(to_precent(left[:Type])) + impurity_func(to_precent(right[:Type]))
 end
 
-# find optimum
-function find_optimum_for(df, var)
-  result = optimize(
-    th -> totoal_IG_after_split(df, var, th),
-    min(df[var]...),
-    max(df[var]...))
-  return Optim.minimizer(result)
+# Find optimum for a variable
+function find_optimum_for(df, var, impurity_func)
+  x_lower, x_upper = min(df[var]...), max(df[var]...)
+  if x_lower == x_upper
+    return totoal_impurity_after_split(df, var, x_lower, impurity_func), x_lower
+  else
+    result = optimize(
+      th -> totoal_impurity_after_split(df, var, th, impurity_func),
+      x_lower,
+      x_upper)
+    return Optim.minimum(result), Optim.minimizer(result)
+  end
 end
 
-find_optimum_for(training, :PW)
+# Find most
+function findmost(da)
+  d = Dict({t => 0 for t in Set(da[:Type])})
+  for t in da[:Type]
+    d[t] += 1
+  end
+  return findmax(d) # ((type, count), idx)
+end
+
+# Build tree
+function build_tree(df, early_stop_th, impurity_func)
+  if size(df, 1) < early_stop_th
+    return findmost(df)[1][1]
+  else
+    split_choice = [find_optimum_for(df, h, impurity_func) for h in HS]
+    split_idx = findmax(map(x -> x[1], split_choice))[2]
+    split_by = HS[split_idx], split_choice[split_idx][2]
+    left, right = split_by_th(df, split_by...)
+    if size(left, 1) == 0 || size(right, 1) == 0
+      return findmost(df)[1][1]
+    else
+      return ((split_by), build_tree(left, early_stop_th, impurity_func), build_tree(right, early_stop_th, impurity_func))
+    end
+  end
+end
+
+# Traverse
+function traverse(df, tree)
+  if length(tree) == 1
+    return tree
+  else
+    by, threshold = tree[1]
+    if Int64(df[by]) > threshold
+      return traverse(df, tree[2])
+    else
+      return traverse(df, tree[3])
+    end
+  end
+end
+
+Base.convert(::Type{Int64}, x::DataArrays.DataArray{Int64,1}) = x[1]
+
+# Training
+function train(df, early_stop_th)
+  # Build tree
+  tree = build_tree(training, early_stop_th, IG)
+
+  # Validation
+  predictions = [traverse(validation[i, :], tree) for i = 1:size(validation, 1)]
+  targets = [Int64(validation[i, :][:Type]) for i = 1:size(validation, 1)]
+
+  acc = sum(predictions .== targets) / size(validation, 1)
+  return tree, acc
+end
+
+# Cross validation
+function cv()
+  acc = 0
+  early_stop_th = 0
+  for th = 2:10
+    new_tree, new_acc = train(training, th)
+    if new_acc > acc
+      tree, acc = new_tree, new_acc
+      early_stop_th = th
+    end
+  end
+  println("Accuracy\t:\t", acc, "\nEarly stop\t:\t", early_stop_th)
+
+  # Testing
+  predictions = [traverse(testing[i, :], tree) for i = 1:size(testing, 1)]
+  targets = [Int64(testing[i, :][:Type]) for i = 1:size(testing, 1)]
+
+  acc = sum(predictions .== targets) / size(testing, 1)
+end
+
+export build_tree
