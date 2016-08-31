@@ -1,18 +1,3 @@
-# Load packages
-using DataArrays, DataFrames
-using Optim
-include("helper.jl")
-
-# Read dataset
-df = readtable("Fisher.csv")
-
-# Split dataset
-training = df[1:100, :]
-validation = df[101:130, :]
-testing = df[131:150, :]
-
-HS = keys(df)[2:5]          # headers
-
 # Split by threshold
 function split_by_th(df, by, threshold)
   return df[df[by] .> threshold, :], df[df[by] .<= threshold, :]
@@ -43,26 +28,18 @@ function find_optimum_for(df, var, impurity_func)
   end
 end
 
-# Find most
-function findmost(da)
-  d = Dict({t => 0 for t in Set(da[:Type])})
-  for t in da[:Type]
-    d[t] += 1
-  end
-  return findmax(d) # ((type, count), idx)
-end
-
 # Build tree
 function build_tree(df, early_stop_th, impurity_func)
+  headers = keys(df)[2:5]
   if size(df, 1) < early_stop_th
-    return findmost(df)[1][1]
+    return findmost(df)
   else
-    split_choice = [find_optimum_for(df, h, impurity_func) for h in HS]
+    split_choice = [find_optimum_for(df, h, impurity_func) for h in headers]
     split_idx = findmax(map(x -> x[1], split_choice))[2]
-    split_by = HS[split_idx], split_choice[split_idx][2]
+    split_by = headers[split_idx], split_choice[split_idx][2]
     left, right = split_by_th(df, split_by...)
     if size(left, 1) == 0 || size(right, 1) == 0
-      return findmost(df)[1][1]
+      return findmost(df)
     else
       return ((split_by), build_tree(left, early_stop_th, impurity_func), build_tree(right, early_stop_th, impurity_func))
     end
@@ -117,5 +94,3 @@ function cv()
 
   acc = sum(predictions .== targets) / size(testing, 1)
 end
-
-export build_tree
